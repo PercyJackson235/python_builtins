@@ -50,10 +50,13 @@ def _bin(number: int) -> str:
             raise TypeError(f" __index__ returned non-int (type {type_name(number)})")
         if number < 0:
             header = '-' + header
+            number *= -1
+        elif number == 0:
+            return header + '0'
         while number != 0:
             binary = str(number % 2) + binary
             number //= 2
-        return binary
+        return header + binary
     raise TypeError(f"{type_name(number)!r} object cannot be interpreted as an integer")
 
 
@@ -180,6 +183,9 @@ def _hex(number: int) -> str:
             raise TypeError(f" __index__ returned non-int (type {type_name(number)})")
         if number < 0:
             header = '-' + header
+            header *= -1
+        elif number == 0:
+            return header + '0'
         while number != 0:
             digit = number % 16
             hex_num = str(hex_char.get(digit, digit)) + hex_num
@@ -397,6 +403,9 @@ def _oct(number: int) -> str:
             raise TypeError(f" __index__ returned non-int (type {type_name(number)})")
         if number < 0:
             header = '-' + header
+            number *= -1
+        elif number == 0:
+            return header + '0'
         while number != 0:
             digit = number % 8
             hex_num = str(digit) + hex_num

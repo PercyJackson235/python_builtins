@@ -1,6 +1,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <python3.8/structmember.h>
+#include <python3.8/frameobject.h>
 #include <string>
 #include <stdio.h>
 #include <unordered_map>
@@ -190,7 +191,66 @@ static PyObject * c_callable_api_func(PyObject *self, PyObject *item){
     Py_RETURN_FALSE;
 }
 
-//
+static PyObject * c_dir_func(PyObject *self, PyObject *args){
+    PyObject *item = NULL;
+    PyObject *attrs, *result;
+    if (!(PyArg_ParseTuple(args, "|O", &item))){
+        PyObject *pystring = PyUnicode_FromString("Error Occurred!");
+        PyErr_SetObject(PyExc_Exception, pystring);
+        return NULL;
+    }
+    if (item == NULL){
+        PyFrameObject *cur_frame = PyEval_GetFrame();
+        PyObject *f_locals;
+        if (cur_frame->f_back != NULL){
+            f_locals = cur_frame->f_back->f_locals;
+        }
+        else {
+            f_locals = cur_frame->f_locals;
+        }
+        attrs = PyDict_Keys(f_locals);
+    }
+    else if (PyObject_HasAttrString(item, "__dir__")){
+        PyObject *func = PyObject_GetAttrString(item, "__dir__");
+        attrs = PyObject_CallObject(func, NULL);
+    }
+    else {
+        attrs = PyList_New(0);
+        if (PyObject_HasAttrString(item, "__dict__")){
+            _PyList_Extend((PyListObject *)attrs, PyObject_GetAttrString(item, "__dict__"));
+        }
+        if (PyObject_HasAttrString(item, "__slots__")){
+            PyObject *slot = PyObject_GetAttrString(item, "__slots__");
+            if (PySequence_Check(slot)){
+                if (PyUnicode_Check(slot)){
+                    PyList_Append(attrs, slot);
+                }
+                else {
+                    _PyList_Extend((PyListObject *)attrs, slot);
+                }
+            }
+            else {
+                PyList_Append(attrs, slot);
+            }
+        }
+    }
+    result = PyList_New(0);
+    _PyList_Extend((PyListObject *)result, PySet_New(attrs));
+    PyList_Sort(result);
+    Py_XDECREF(attrs);
+    return result;
+}
+
+static PyObject * c_dir_api_func(PyObject *self, PyObject *args){
+    PyObject *item = NULL;
+    if (!(PyArg_ParseTuple(args, "|O", &item))){
+        PyObject *pystring = PyUnicode_FromString("Error Occurred!");
+        PyErr_SetObject(PyExc_Exception, pystring);
+        return NULL;
+    }
+    PyObject *result = PyObject_Dir(item);
+    return result;
+}
 
 // Module Level Function Registry 
 static PyMethodDef CPPBuiltinsMethods[] = {
@@ -204,6 +264,8 @@ static PyMethodDef CPPBuiltinsMethods[] = {
     {"bool_api", c_bool_api_func, METH_O, "bool() using C API."},
     {"callable", c_callable_func, METH_O, "callable() in C++"},
     {"callable_api", c_callable_api_func, METH_O, "callable() using C API."},
+    {"dir", c_dir_func, METH_VARARGS, "dir() in C++."},
+    {"dir_api", c_dir_api_func, METH_VARARGS, "dir() using C API."},
     {NULL, NULL, 0, NULL}
 };
 

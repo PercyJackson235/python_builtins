@@ -191,6 +191,98 @@ static PyObject * c_callable_api_func(PyObject *self, PyObject *item){
     Py_RETURN_FALSE;
 }
 
+typedef struct {
+    PyObject_HEAD
+    PyFunctionObject *function_wrapper;
+    PyObject *owner;
+    PyFunctionObject * __wrapped__; // old function
+} Py_ClassMethodObject;
+
+// ClassMethod __new__
+static PyObject * Py_ClassMethod_New(PyTypeObject *type, PyObject *args, PyObject *kwargs){
+    Py_ClassMethodObject *obj = (Py_ClassMethodObject *)type->tp_alloc(type, 0);
+    if (!obj){
+        std::printf("Testing for Runtime.");
+        return NULL;
+    }
+    return (PyObject *) obj;
+}
+
+static int Py_ClassMethod_init(Py_ClassMethodObject *self, PyObject *args, PyObject *kwargs){
+    PyObject *funcobj;
+    if (!PyArg_ParseTuple(args, "O", &funcobj)){
+        std::printf("Error Occured\n");
+        return NULL;
+    }
+    else if (funcobj == NULL){
+        PyObject *pystring = PyUnicode_FromString("args was null");
+        PyErr_SetObject(PyExc_Exception, pystring);
+        return -1;
+    }
+    Py_XINCREF(funcobj);
+    self->__wrapped__ = (PyFunctionObject *)funcobj;
+    char func_string[] = "lambda self, *args, **kwargs: self.__wrapped__(self.owner, *args, **kwargs)";
+    PyCompilerFlags flags;
+    flags.cf_flags = NULL;
+    PyObject *fname = PyUnicode_FromString("cppbuiltins");
+    PyObject *temp_func = Py_CompileStringObject(func_string, fname, Py_eval_input, &flags, -1);
+    self->function_wrapper = (PyFunctionObject *) PyFunction_New(temp_func, PyEval_GetGlobals());
+    Py_XDECREF(temp_func);
+    self->function_wrapper->func_name = self->__wrapped__->func_name;
+    self->function_wrapper->func_module = self->__wrapped__->func_module;
+    self->function_wrapper->func_doc = self->__wrapped__->func_doc;
+    return 0;
+}
+
+static PyObject * Py_ClassMethod_Function(Py_ClassMethodObject *self, PyObject *owner){
+    self->owner = owner;
+    return (PyObject *)self->function_wrapper;
+}
+
+/*static PyObject * Py_ClassMethod_wrapper(Py_ClassMethodObject *self, PyObject *args, PyObject *kwargs){
+    return self->function_wrapper(self->owner, args, kwargs);
+}*/
+
+static PyObject * Py_ClassMethod_get(Py_ClassMethodObject *self, PyObject *instance, PyObject *owner){
+    return Py_ClassMethod_Function(self, owner);
+}
+
+static PyMemberDef Py_ClassMethodType_members[] = {
+    {"__wrapped__", T_OBJECT_EX, offsetof(Py_ClassMethodObject, __wrapped__)},
+    {"owner", T_OBJECT_EX, offsetof(Py_ClassMethodObject, owner)},
+    {NULL}
+};
+
+/* classmethod definition. */
+static PyTypeObject Py_ClassMethodType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "classmethod",
+    .tp_basicsize = sizeof(Py_ClassMethodObject),
+    .tp_itemsize = 0,
+    .tp_getattr = (getattrfunc) PyObject_GenericGetAttr,
+    .tp_setattr = (setattrfunc) PyObject_GenericSetAttr,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc = "A Class Method in C++.",
+    .tp_members = Py_ClassMethodType_members,
+    .tp_descr_get = (descrgetfunc) Py_ClassMethod_get,
+    .tp_init = (initproc) Py_ClassMethod_init,
+    .tp_new = Py_ClassMethod_New, //PyType_GenericNew,
+};
+
+static PyObject * c_class_method(PyObject *self, PyObject *arg){
+    PyFunctionObject *method = (PyFunctionObject *) arg;
+    std::string qualname = PyUnicode_AsUTF8(method->func_qualname);
+    int dot_pos = qualname.find_last_of(".");
+    PyObject *globals = PyEval_GetGlobals();
+    if (globals == NULL){
+        PyObject *pystring = PyUnicode_FromString("Unable to get Global Dictionary");
+        PyErr_SetObject(PyExc_RuntimeError, pystring);
+        return NULL;
+    }
+    //PyObject *PyTypename = PyDict_GetItemString(globals, )
+    std::string clsname = qualname.substr(dot_pos+1);
+}
+
 static PyObject * c_dir_func(PyObject *self, PyObject *args){
     PyObject *item = NULL;
     PyObject *attrs, *result;
@@ -281,20 +373,20 @@ static struct PyModuleDef cppbuiltinsmodule = {
 //Module initialization function
 PyMODINIT_FUNC
 PyInit_cppbuiltins(void) {
-    /*if (PyType_Ready(&Py_ClassMethodType) < 0){
+    if (PyType_Ready(&Py_ClassMethodType) < 0){
         std::printf("Failure\n");
         return NULL;
-    }*/
+    }
     PyObject* m = PyModule_Create(&cppbuiltinsmodule);
     if (m == NULL) {
         return NULL;
     }
-    /*Py_INCREF(&Py_ClassMethodType);
+    Py_INCREF(&Py_ClassMethodType);
     if (PyModule_AddObject(m, "classmethod", (PyObject *) &Py_ClassMethodType) < 0){
         Py_DECREF(&Py_ClassMethodType);
         Py_DECREF(m);
         return NULL;
-    }*/
+    }
     return m;
 }
 

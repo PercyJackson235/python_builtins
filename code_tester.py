@@ -14,5 +14,5 @@ class Fake:
     def fake(cls):
         print(cls)
 
-
+print(Fake.fake())
 print("Success")

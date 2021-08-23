@@ -17,9 +17,7 @@ static PyObject * Py_ClassMethod_New(PyTypeObject *type, PyObject *args, PyObjec
 
 static int Py_ClassMethod_init(Py_ClassMethodObject *self, PyObject *args, PyObject *kwargs){
     PyObject *funcobj;
-    std::printf("Started __init__\n");
-    std::printf("What\n");
-    if (!PyArg_ParseTuple(args, "O", funcobj)){
+    if (!PyArg_ParseTuple(args, "O", &funcobj)){
         std::printf("Error Occured\n");
         return NULL;
     }
@@ -30,14 +28,17 @@ static int Py_ClassMethod_init(Py_ClassMethodObject *self, PyObject *args, PyObj
     }
     Py_XINCREF(funcobj);
     self->__wrapped__ = (PyFunctionObject *)funcobj;
-    std::printf("Hello\n");
     char func_string[] = "lambda self, *args, **kwargs: self.__wrapped__(self.owner, *args, **kwargs)";
-    self->function_wrapper = (PyFunctionObject *) PyRun_String(func_string,
-                Py_single_input, PyEval_GetGlobals(), PyEval_GetLocals());
+    PyCompilerFlags flags;
+    flags.cf_flags = NULL;
+    PyObject *fname = PyUnicode_FromString("cppbuiltins");
+    PyObject *temp_func = Py_CompileStringObject(func_string, fname, Py_eval_input, &flags, -1);
+    self->function_wrapper = (PyFunctionObject *) PyFunction_New(temp_func, PyEval_GetGlobals());
+    Py_XDECREF(temp_func);
     self->function_wrapper->func_name = self->__wrapped__->func_name;
     self->function_wrapper->func_module = self->__wrapped__->func_module;
     self->function_wrapper->func_doc = self->__wrapped__->func_doc;
-    std::printf("Hello\n");
+    return 0;
 }
 
 static PyObject * Py_ClassMethod_Function(Py_ClassMethodObject *self, PyObject *owner){
@@ -74,3 +75,17 @@ static PyTypeObject Py_ClassMethodType = {
     .tp_init = (initproc) Py_ClassMethod_init,
     .tp_new = Py_ClassMethod_New, //PyType_GenericNew,
 };
+
+static PyObject * c_class_method(PyObject *self, PyObject *arg){
+    PyFunctionObject *method = (PyFunctionObject *) arg;
+    std::string qualname = PyUnicode_AsUTF8(method->func_qualname);
+    int dot_pos = qualname.find_last_of(".");
+    PyObject *globals = PyEval_GetGlobals();
+    if (globals == NULL){
+        PyObject *pystring = PyUnicode_FromString("Unable to get Global Dictionary");
+        PyErr_SetObject(PyExc_RuntimeError, pystring);
+        return NULL;
+    }
+    //PyObject *PyTypename = PyDict_GetItemString(globals, )
+    std::string clsname = qualname.substr(dot_pos+1);
+}

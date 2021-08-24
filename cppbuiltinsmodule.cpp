@@ -732,6 +732,167 @@ static PyObject * c_issubclass_api_func(PyObject *self, PyObject *args){
     Py_RETURN_FALSE;
 }
 
+typedef struct {
+    PyObject_HEAD
+    PyObject *seq_or_callable;
+    PyObject *sentinel;
+    Py_ssize_t index;
+} PyIterObject;
+
+static PyObject * PyIterObject_New(PyTypeObject *type, PyObject *seq, PyObject *sentinel){
+    PyIterObject *new_obj = (PyIterObject *)type->tp_alloc(type, 0);
+    if (!new_obj){
+        return NULL;
+    }
+    return (PyObject *) new_obj;
+}
+
+int PyIterObject_Init(PyIterObject *self, PyObject *seq, PyObject *sentinel){
+    if (!seq){
+        PyErr_SetString(PyExc_TypeError, "iterator expects a sequence or callable!");
+        return -1;
+    }
+    else if (sentinel && !PyCallable_Check(seq)){
+        PyErr_SetString(PyExc_TypeError, "iterator(v, w): v must be callable");
+        return -1;
+    }
+    self->seq_or_callable = seq;
+    self->sentinel = sentinel;
+    if (self->sentinel == NULL){
+        self->index = 0;
+    }
+    return 0;
+}
+
+static PyObject * PyIterObject_Getitem(PyIterObject *self){
+    PyObject *item = PySequence_GetItem(self->seq_or_callable, self->index);
+    if (PyErr_Occurred() || item == NULL){
+        if (PyErr_ExceptionMatches(PyExc_IndexError)){
+            PyErr_Clear();
+            PyErr_SetString(PyExc_StopIteration, "");
+        }
+        return NULL;
+    }
+    self->index += 1;
+    return item;
+}
+
+static PyObject * PyIterObject_Callable(PyIterObject *self){
+    PyObject *item = PyObject_CallNoArgs(self->seq_or_callable);
+    if (PyErr_Occurred() || item == NULL || item == self->sentinel){
+        if (PyErr_Occurred()){
+            PyErr_Clear();
+        }
+        PyErr_SetString(PyExc_StopIteration, "");
+        return NULL;
+    }
+    return item;
+}
+
+static PyObject * PyIterObject_Next(PyIterObject *self){
+    PyObject *item;
+    if (self->sentinel == NULL){
+        item = PyIterObject_Getitem(self);
+    }
+    else {
+        item = PyIterObject_Callable(self);
+    }
+    return item;
+}
+
+static PyObject * PyIterObject_Iter(PyIterObject *self){
+    Py_XINCREF(self);
+    self->index = 0;
+    return (PyObject *)self;
+}
+
+static void PyIterObject_Dealloc(PyIterObject *self){
+    Py_XDECREF(self->seq_or_callable);
+    Py_XDECREF(self->sentinel);
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static PyTypeObject PyIterObjectType = {
+    PyObject_HEAD_INIT(NULL)
+    .tp_name = "cppbuiltins.iterator",
+    .tp_basicsize = sizeof(PyIterObject),
+    .tp_itemsize = 0,
+    .tp_dealloc = (destructor) PyIterObject_Dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc = "An iterator (for objects that don't have __iter__) in C++",
+    .tp_iter = (getiterfunc) PyIterObject_Iter,
+    .tp_iternext = (iternextfunc) PyIterObject_Next,
+    .tp_init = (initproc) PyIterObject_Init,
+    .tp_new = PyIterObject_New
+};
+
+static PyObject * c_iter_func(PyObject *self, PyObject *args){
+    PyObject *seq_or_callable, *iterator, *sentinel = NULL;
+    if (!PyArg_ParseTuple(args, "O|O", &seq_or_callable, &sentinel)){
+        return NULL;
+    }
+    if (sentinel == NULL){
+        iterator = PyObject_CallMethod(seq_or_callable, "__iter__", NULL);
+        if (iterator != NULL){
+            return iterator;
+        }
+        else {
+            PyErr_Clear();
+            if (!PyObject_HasAttrString(seq_or_callable, "__getitem__")){
+                char msg[] = "'%s' object is not iterable";
+                PyErr_Format(PyExc_TypeError, msg, seq_or_callable->ob_type->tp_name);
+                return NULL;
+            }
+            else {
+                PyObject *func = PyObject_GetAttrString(seq_or_callable, "__getitem__");
+                if (!PyCallable_Check(func)){
+                    Py_XDECREF(func);
+                    char msg[] = "'%s' object is not iterable";
+                    PyErr_Format(PyExc_TypeError, msg, seq_or_callable->ob_type->tp_name);
+                    return NULL;
+                }
+                Py_XDECREF(func);
+                Py_XINCREF(seq_or_callable);
+                iterator = PyIterObject_New(&PyIterObjectType, seq_or_callable, NULL);
+                if (PyIterObject_Init((PyIterObject *)iterator, seq_or_callable, NULL) < 0){
+                    PyIterObject_Dealloc((PyIterObject *)iterator);
+                    return NULL;
+                }
+                return iterator;
+            }
+        }
+    }
+    else {
+        if (!PyCallable_Check(seq_or_callable)){
+            PyErr_SetString(PyExc_TypeError, "iter(v, w): v must be callable");
+            return NULL;
+        }
+        Py_XINCREF(seq_or_callable);
+        Py_XINCREF(sentinel);
+        iterator = PyIterObject_New(&PyIterObjectType, seq_or_callable, sentinel);
+        if (PyIterObject_Init((PyIterObject *)iterator, seq_or_callable, sentinel) < 0){
+            PyIterObject_Dealloc((PyIterObject *)iterator);
+            return NULL;
+        }
+        return iterator;
+    }
+}
+
+static PyObject * c_iter_api_func(PyObject *self, PyObject *args){
+    PyObject *seq_or_callable, *sentinel = NULL;
+    if (!PyArg_ParseTuple(args, "O|O", &seq_or_callable, &sentinel)){
+        return NULL;
+    }
+    else if (sentinel != NULL){
+        if (!PyCallable_Check(seq_or_callable)){
+            PyErr_SetString(PyExc_TypeError, "iter(v, w): v must be callable");
+            return NULL; 
+        }
+        return PyCallIter_New(seq_or_callable, sentinel);
+    }
+    return PyObject_GetIter(seq_or_callable);
+}
+
 // Module Level Function Registry 
 static PyMethodDef CPPBuiltinsMethods[] = {
     // Python function name, Actual function, function flag, docstring
@@ -759,7 +920,9 @@ static PyMethodDef CPPBuiltinsMethods[] = {
     {"isinstance", c_isinstance_func, METH_VARARGS, "isinstance() in C++"},
     {"isinstance_api", c_isinstance_api_func, METH_VARARGS, "isinstance() in C API."},
     {"issubclass", c_issubclass_func, METH_VARARGS, "issubclass() in C++"},
-    {"issubclass_api", c_issubclass_api_func, METH_VARARGS, "issubclass using C API."},
+    {"issubclass_api", c_issubclass_api_func, METH_VARARGS, "issubclass() using C API."},
+    {"iter", c_iter_func, METH_VARARGS, "iter() in C++"},
+    {"iter_api", c_iter_api_func, METH_VARARGS, "iter() using C API."},
     {NULL, NULL, 0, NULL}
 };
 
@@ -795,6 +958,7 @@ PyInit_cppbuiltins(void) {
     }*/
     Add_PyType_Func(m, &PyEnumerate_Type);
     Add_PyType_Func(m, &PyFilterMyType);
+    Add_PyType_Func(m, &PyIterObjectType);
     return m;
 }
 

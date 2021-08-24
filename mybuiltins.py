@@ -259,6 +259,8 @@ def _len(obj: object) -> int:
             else:
                 msg = f"{type_name(result)!r} object cannot be interpreted as an integer"
                 raise TypeError(msg)
+        if result < 0:
+            raise ValueError("__len__() should return >= 0")
         return result
     raise TypeError(f"object of type {type_name(obj)!r} has no _len()")
 

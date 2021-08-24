@@ -893,6 +893,60 @@ static PyObject * c_iter_api_func(PyObject *self, PyObject *args){
     return PyObject_GetIter(seq_or_callable);
 }
 
+//METH_O
+static PyObject * c_len_func(PyObject *self, PyObject *item){
+    PyObject *result;
+    if (PyObject_HasAttrString(item, "__len__")){
+        item = PyObject_CallMethod(item, "__len__", NULL);
+        Py_ssize_t length;
+        if (item == NULL){
+            return NULL;
+        }
+        else if (PyLong_CheckExact(item)){
+            length = PyLong_AsSsize_t(item);
+            if (length < 0){
+                if (!PyErr_Occurred()){
+                    PyErr_SetString(PyExc_ValueError, "__len__() should return >= 0");
+                }
+                return NULL;
+            }
+            return item;
+        }
+        else if ((result = PyNumber_Index(item)) != NULL){
+            length = PyLong_AsSsize_t(result);
+            if (length < 0){
+                if (!PyErr_Occurred()){
+                    PyErr_SetString(PyExc_ValueError, "__len__() should return >= 0");
+                }
+                return NULL;
+            }
+            Py_XDECREF(item);
+            return result;
+        }
+        else {
+            if (PyErr_Occurred()){
+                return NULL;
+            }
+            char msg[] = "'%s' object cannot be interpreted as an integer";
+            PyErr_Format(PyExc_TypeError, msg, item->ob_type->tp_name);
+        }
+    }
+    char msg[] = "object of type '%s' has no len()";
+    PyErr_Format(PyExc_TypeError, msg, item->ob_type->tp_name);
+    return NULL;
+}
+
+static PyObject * c_len_api_func(PyObject *self, PyObject *item){
+    Py_ssize_t result = PyObject_Length(item);
+    if (result < 0){
+        if (!PyErr_Occurred()){
+            PyErr_SetString(PyExc_ValueError, "__len__() should return >= 0");
+        }
+        return NULL;
+    }
+    return PyLong_FromSsize_t(result);
+}
+
 // Module Level Function Registry 
 static PyMethodDef CPPBuiltinsMethods[] = {
     // Python function name, Actual function, function flag, docstring
@@ -923,6 +977,8 @@ static PyMethodDef CPPBuiltinsMethods[] = {
     {"issubclass_api", c_issubclass_api_func, METH_VARARGS, "issubclass() using C API."},
     {"iter", c_iter_func, METH_VARARGS, "iter() in C++"},
     {"iter_api", c_iter_api_func, METH_VARARGS, "iter() using C API."},
+    {"len", c_len_func, METH_O, "len() in C++."},
+    {"len_api", c_len_api_func, METH_O, "len() using C API."},
     {NULL, NULL, 0, NULL}
 };
 

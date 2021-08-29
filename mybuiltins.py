@@ -293,7 +293,7 @@ def merge(left: list, right: list) -> list:
         # The elements need to be sorted to add them to the
         # resultant array, so you need to decide whether to get
         # the next element from the first or the second array
-        if left[i] < right[j]:
+        if left[i] <= right[j]:
             result.append(left[i])
             i += 1
         else:

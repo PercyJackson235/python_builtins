@@ -2,6 +2,7 @@
 #include <Python.h>
 #include <python3.9/structmember.h>
 #include <python3.9/frameobject.h>
+//#include <python3.9/internal/pycore_pystate.h>
 #include <string>
 #include <iostream>
 #include <unordered_map>
@@ -361,7 +362,7 @@ static PyObject * PyEnumerate_New(PyTypeObject *type, PyObject *args, PyObject *
 int PyEnumerate_Init(PyEnumerateObject *self, PyObject *args, PyObject *kwargs){
     self->counter = 0;
     PyObject *seq;
-    static char *kwlist[] = {(char *)"iterable", (char *)"start", NULL};
+    static char *kwlist[] = {(char *)"", (char *)"start", NULL};
     if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|n", kwlist, &seq, &(self->counter))){
         return -1;
     }
@@ -947,6 +948,337 @@ static PyObject * c_len_api_func(PyObject *self, PyObject *item){
     return PyLong_FromSsize_t(result);
 }
 
+typedef struct {
+    PyObject_HEAD
+    PyObject *func;
+    PyObject *iters;
+    Py_ssize_t nargs;
+} PyMapObject;
+
+void PyMapError(PyObject *iters, PyObject *seq, PyObject *iterargs, Py_ssize_t count);
+
+static PyObject * PyMapObject_New(PyTypeObject *type, PyObject *args, PyObject *kwargs){
+    PyMapObject *new_obj = (PyMapObject *)type->tp_alloc(type, 0);
+    if (!new_obj){
+        return NULL;
+    }
+    Py_ssize_t count, numargs = PyTuple_Size(args);
+    PyObject *iters, *seq, *iterseq, *newargs, *newargsiter;
+    if (numargs < 2){
+        PyErr_SetString(PyExc_TypeError, "map() must have at least two arguments.");
+        return NULL;
+    }
+    else if (!PyCallable_Check(PyTuple_GET_ITEM(args, 0))){
+        char msg[] = "'%s' object is not callable";
+        PyErr_Format(PyExc_TypeError, msg, PyTuple_GET_ITEM(args, 0)->ob_type->tp_name);
+        return NULL;
+    }
+    newargs = PyTuple_GetSlice(args, 1, numargs);
+    newargsiter = PyObject_GetIter(newargs);
+    Py_XDECREF(newargs);
+    new_obj->nargs = numargs - 1;
+    iters = PyTuple_New(numargs - 1);
+    count = 0;
+    while ((seq = PyIter_Next(newargsiter)) != NULL){
+        if (!PyObject_HasAttrString(seq, "__iter__") && !PyObject_HasAttrString(seq, "__getitem__")){
+            PyMapError(iters, seq, newargsiter, count);
+            return NULL;
+        }
+        else if ((iterseq = PyObject_GetIter(seq)) == NULL){
+            PyMapError(iters, seq, newargsiter, count);
+            return NULL;
+        }
+        Py_XDECREF(seq);
+        PyTuple_SET_ITEM(iters, count, iterseq);
+        count += 1;
+    }
+    Py_XDECREF(newargsiter);
+    new_obj->iters = iters;
+    new_obj->func = PySequence_ITEM(args, 0);
+    return (PyObject *) new_obj;
+}
+
+void PyMapError(PyObject *iters, PyObject *seq, PyObject *iterargs, Py_ssize_t count){
+    for (Py_ssize_t i = 0; i < count; i++){
+        Py_XDECREF(PyTuple_GET_ITEM(iters, i));
+    }
+    PyErr_Clear();
+    Py_XDECREF(iters);
+    char msg[] = "'%s' object is not iterable";
+    PyErr_Format(PyExc_TypeError, msg, seq->ob_type->tp_name);
+    Py_XDECREF(seq);
+    Py_XDECREF(iterargs);
+}
+
+static PyObject * PyMapObject_Iter(PyMapObject *self){
+    Py_XINCREF(self);
+    return (PyObject *)self;
+}
+
+static PyObject * PyMapObject_Next(PyMapObject *self){
+    PyThreadState *tstate = PyThreadState_Get();
+    PyObject *val;
+    PyObject *arg_stack[self->nargs];
+    for (Py_ssize_t i = 0; i < self->nargs; i++){
+        val = PyIter_Next(PyTuple_GET_ITEM(self->iters, i));
+        if (val == NULL){
+            for (Py_ssize_t c = 0; c < i; c++){
+                Py_XDECREF(arg_stack[c]);
+            }
+            PyErr_SetString(PyExc_StopIteration, "");
+            return NULL;
+        }
+        arg_stack[i] = val;
+    }
+    return _PyObject_VectorcallTstate(tstate, self->func, arg_stack, self->nargs, NULL);
+}
+
+static void PyMapObject_Dealloc(PyMapObject *self){
+    Py_XDECREF(self->func);
+    for (Py_ssize_t i = 0; i < self->nargs; i++){
+        Py_XDECREF(PyTuple_GET_ITEM(self->iters, i));
+    }
+    Py_XDECREF(self->iters);
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static PyTypeObject PyMapObjectType = {
+    PyObject_HEAD_INIT(NULL)
+    .tp_name = "cppbuiltins.map",
+    .tp_basicsize = sizeof(PyMapObject),
+    .tp_itemsize = 0,
+    .tp_dealloc = (destructor) PyMapObject_Dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc = "An map object in C++",
+    .tp_iter = (getiterfunc) PyMapObject_Iter,
+    .tp_iternext = (iternextfunc) PyMapObject_Next,
+    .tp_new = PyMapObject_New
+};
+
+static void insertion_sort(PyObject *list, Py_ssize_t *leftp, Py_ssize_t *rightp){
+    Py_ssize_t right, indexpos, left = 0;
+    Py_ssize_t size = PyList_Size(list);
+    PyObject *item, *tempitem;
+    if (leftp != NULL){
+        left = *leftp;
+    }
+    if (rightp == NULL){
+        right = size - 1;
+    }
+    else {
+        right = *rightp;
+    }
+    if (left < 0 || left >= right){
+        PyErr_SetString(PyExc_IndexError, "left side out of bounds");
+        return;
+    }
+    else if (right <= left || right >= size){
+        PyErr_SetString(PyExc_IndexError, "right side out of bounds");
+        return;
+    }
+    for (Py_ssize_t pos = left + 1; pos < right + 1; pos++){
+        item = PyList_GetItem(list, pos);
+        Py_XINCREF(item);
+        indexpos = pos;
+        while ((indexpos > left) &&
+                PyObject_RichCompareBool(PyList_GetItem(list, indexpos - 1), item, Py_GT)){
+            tempitem = PyList_GetItem(list, indexpos - 1);
+            Py_XINCREF(tempitem);
+            Py_XINCREF(PyList_GetItem(list, indexpos));
+            if (PyList_SetItem(list, indexpos, tempitem) == -1){
+                return;
+            }
+            indexpos--;
+        }
+        Py_XINCREF(PyList_GetItem(list, indexpos));
+        if (PyList_SetItem(list, indexpos, item) == -1){
+            return;
+        }
+    }
+}
+
+static PyObject * c_insertion_sort_func(PyObject *self, PyObject *list){
+    if (!PyObject_IsInstance(list, (PyObject *)&PyList_Type)){
+        char msg[] = "insertion sort object type must be list, not '%s'";
+        PyErr_Format(PyExc_TypeError, msg, list->ob_type->tp_name);
+        return NULL;
+    }
+    Py_ssize_t start = 0;
+    insertion_sort(list, &start, NULL);
+    if (PyErr_Occurred()){
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject * merge(PyObject *left, PyObject *right){
+    if (left == NULL || right == NULL){
+        return NULL;
+    }
+    Py_ssize_t rightsize = PyList_Size(right);
+    Py_ssize_t leftsize = PyList_Size(left);
+    if (!leftsize){
+        return right;
+    }
+    else if (!rightsize){
+        return left;
+    }
+    PyObject *result = PyList_New(0);
+    PyObject *leftitem, *rightitem, *itemlist;
+    Py_ssize_t lpos = 0;
+    Py_ssize_t rpos = 0;
+    Py_ssize_t totalsize = 0;
+    while (PyList_Size(result) < PyList_Size(left) + PyList_Size(right)){
+        leftitem = PyList_GetItem(left, lpos);
+        rightitem = PyList_GetItem(right, rpos);
+        if (PyObject_RichCompareBool(leftitem, rightitem, Py_LE)){
+            Py_XINCREF(leftitem);
+            if (PyList_Append(result, leftitem) == -1){
+                Py_XDECREF(result);
+                return NULL;
+            }
+            lpos += 1;
+        }
+        else {
+            Py_XINCREF(rightitem);
+            if (PyList_Append(result, rightitem) == -1){
+                Py_XDECREF(result);
+                return NULL;
+            }
+            rpos += 1;
+        }
+        if (lpos == leftsize){
+            if ((itemlist = PyList_GetSlice(right, rpos, rightsize)) == NULL){
+                Py_XDECREF(result);
+                return NULL;
+            }
+            totalsize = PyList_Size(result);
+            if (PyList_SetSlice(result, totalsize, totalsize + PyList_Size(itemlist), itemlist) < 0){
+                Py_XDECREF(itemlist);
+                Py_XDECREF(result);
+                return NULL;
+            }
+            break;
+        }
+        else if (rpos == rightsize){
+            if ((itemlist = PyList_GetSlice(left, lpos, leftsize)) == NULL){
+                Py_XDECREF(result);
+                return NULL;
+            }
+            totalsize = PyList_Size(result);
+            if (PyList_SetSlice(result, totalsize, totalsize + PyList_Size(itemlist), itemlist) < 0){
+                Py_XDECREF(itemlist);
+                Py_XDECREF(result);
+                return NULL;
+            }
+            break;
+        }
+    }
+    return result;
+}
+
+static PyObject * merge_sort(PyObject *list){
+    Py_ssize_t end = PyList_Size(list);
+    if (end < 2){
+        return list;
+    }
+    Py_ssize_t middle = end / 2;
+    PyObject *left = PyList_GetSlice(list, 0, middle);
+    PyObject *right = PyList_GetSlice(list, middle, end);
+    if (left == NULL || right == NULL){
+        return NULL;
+    }
+    PyObject *result = merge(merge_sort(left), merge_sort(right));
+    Py_XDECREF(left);
+    Py_XDECREF(right);
+    return result;
+}
+
+static PyObject * c_merge_sort_func(PyObject *self, PyObject *list){
+    PyObject *result, *listcopy;
+    if (!PyObject_IsInstance(list, (PyObject *)&PyList_Type)){
+        listcopy = PySequence_List(list);
+        if (listcopy == NULL){
+            char msg[] = "merge sort object type must be an iterable, not '%s'";
+            PyErr_Format(PyExc_TypeError, msg, list->ob_type->tp_name);
+            return NULL;
+        }
+    }
+    else {
+        listcopy = PyObject_CallMethod(list, "copy", NULL);
+        if (listcopy == NULL){
+            PyErr_SetString(PyExc_TypeError, "Unable to copy list");
+            return NULL;
+        }
+    }
+    result = merge_sort(listcopy);
+    Py_XDECREF(listcopy);
+    if (PyErr_Occurred()){
+        return NULL;
+    }
+    return result;
+}
+
+static Py_ssize_t calc_min_run(Py_ssize_t length){
+    Py_ssize_t MINRUN = 32, r = 0;
+    while (length >= MINRUN){
+        r |= length & 1;
+        length >>= 1;
+    }
+    return length + r;
+}
+
+static PyObject * timsort(PyObject *list){
+    Py_ssize_t n = PyList_Size(list);
+    Py_ssize_t min_run = calc_min_run(n);
+    Py_ssize_t end, size, right;
+    PyObject *arrayslice, *templist;
+    for (Py_ssize_t start = 0; start < n; start += min_run){
+        end = Py_MIN(start + min_run - 1, n - 1);
+        insertion_sort(list, &start, &end);
+    }
+    size = min_run;
+    while (size < n){
+        for (Py_ssize_t left = 0; left < n; left += 2*size){
+            right = Py_MIN(left + 2*size - 1, n - 1);
+            arrayslice = PyList_GetSlice(list, left, right);
+            templist = merge_sort(arrayslice);
+            Py_XDECREF(arrayslice);
+            if (PyList_SetSlice(list, left, right, templist) == -1){
+                Py_XDECREF(templist);
+                PyList_Type.tp_clear(list);
+                Py_XDECREF(list);
+                return NULL;
+            }
+        }
+        size *= 2;
+    }
+    PyObject_Print(list, stdout, 0);
+    return list;
+}
+
+static PyObject * c_timesort_func(PyObject *self, PyObject *list){
+    PyObject *result;
+    if (!PyObject_IsInstance(list, (PyObject *)&PyList_Type)){
+        result = PySequence_List(list);
+        if (result == NULL){
+            char msg[] = "merge sort object type must be an iterable, not '%s'";
+            PyErr_Format(PyExc_TypeError, msg, list->ob_type->tp_name);
+            return NULL;
+        }
+    }
+    else {
+        result = list;
+    }
+    std::puts("before tim");
+    result = timsort(result);
+    std::puts("after tim");
+    if (PyErr_Occurred() || result == NULL){
+        return NULL;
+    }
+    return result;
+}
+
 // Module Level Function Registry 
 static PyMethodDef CPPBuiltinsMethods[] = {
     // Python function name, Actual function, function flag, docstring
@@ -979,6 +1311,9 @@ static PyMethodDef CPPBuiltinsMethods[] = {
     {"iter_api", c_iter_api_func, METH_VARARGS, "iter() using C API."},
     {"len", c_len_func, METH_O, "len() in C++."},
     {"len_api", c_len_api_func, METH_O, "len() using C API."},
+    {"insertion_sort", c_insertion_sort_func, METH_O, "insertion sort in C++."},
+    {"merge_sort", c_merge_sort_func, METH_O, "merge sort in C++."},
+    {"timsort", c_timesort_func, METH_O, "timsort in C++."},
     {NULL, NULL, 0, NULL}
 };
 
@@ -1015,6 +1350,7 @@ PyInit_cppbuiltins(void) {
     Add_PyType_Func(m, &PyEnumerate_Type);
     Add_PyType_Func(m, &PyFilterMyType);
     Add_PyType_Func(m, &PyIterObjectType);
+    Add_PyType_Func(m, &PyMapObjectType);
     return m;
 }
 

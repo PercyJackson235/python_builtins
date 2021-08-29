@@ -1,18 +1,19 @@
 #!/usr/bin/python3
-from subprocess import call
+import cppbuiltins
+import random
 
-if call(["./compile"]):
-    import sys
-    sys.exit()
-else:
-    call(["clear"])
-    import cppbuiltins
+a = list(range(15))
+print(a)
 
+b = a.copy()
+random.shuffle(b)
+d = b.copy()
+print(b)
 
-class Fake:
-    @cppbuiltins.classmethod
-    def fake(cls):
-        print(cls)
+c = cppbuiltins.merge_sort(b)
+print(f"a == c : {a == c}")
+print(c)
 
-print(Fake.fake())
-print("Success")
+cppbuiltins.timsort(d)
+print(f"a == d : {a == d}")
+

@@ -1,19 +1,22 @@
 #!/usr/bin/python3
 import cppbuiltins
-import random
+import mybuiltins
 
-a = list(range(15))
-print(a)
+class Fake(object):
+    @mybuiltins._classmethod
+    def mybuiltins(cls):
+        print(f"mybuiltins._classmethod: {cls!r}")
+    @classmethod
+    def builtins(cls):
+        print(f"classmethod: {cls!r}")
+    @cppbuiltins.classmethod
+    def cppbuiltins(cls):
+        print(f"cppbuiltins.classmethod: {cls!r}")
 
-b = a.copy()
-random.shuffle(b)
-d = b.copy()
-print(b)
+Fake.mybuiltins()
+Fake.builtins()
+Fake.cppbuiltins()
 
-c = cppbuiltins.merge_sort(b)
-print(f"a == c : {a == c}")
-print(c)
-
-cppbuiltins.timsort(d)
-print(f"a == d : {a == d}")
-
+print(Fake.mybuiltins)
+print(Fake.builtins)
+print(Fake.cppbuiltins)

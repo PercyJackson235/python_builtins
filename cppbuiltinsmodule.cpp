@@ -1,5 +1,8 @@
-#define PY_SSIZE_T_CLEAN
-#include <Python.h>
+#include "cppbuiltinsmodule.hpp"
+#ifndef PY_SSIZE_T_CLEAN
+    #define PY_SSIZE_T_CLEAN
+    #include <Python.h>
+#endif
 #include <python3.9/structmember.h>
 #include <python3.9/frameobject.h>
 //#include <python3.9/internal/pycore_pystate.h>
@@ -198,6 +201,86 @@ static PyObject * c_callable_api_func(PyObject *self, PyObject *item){
     }
     Py_RETURN_FALSE;
 }
+
+/*functools_wraps for functool.wraps 
+ Objects/funcobject.c*/
+
+typedef struct {
+    PyObject_HEAD
+    PyObject *callable;
+    PyObject *dict;
+} MyClassMethod;
+
+//PyType_GenericNew, PyType_GenericAlloc
+
+int MyClassMethod_Init(MyClassMethod *self, PyObject *args, PyObject *kwargs){
+    PyObject *func;
+    if (!PyArg_ParseTuple(args, "O", &func)){
+        return -1;
+    }
+    Py_XINCREF(func);
+    if ((functools_wraps((PyObject *)self, func)) < 0){
+        Py_XDECREF(func);
+        return -1;
+    }
+    self->callable = func;
+    return 0;
+}
+
+static PyObject * MyClassMethod_Descr_Get(MyClassMethod *self, PyObject *obj, PyObject *owner){
+    if (owner == NULL){
+        owner = (PyObject *)(Py_TYPE(obj));
+    }
+    return PyMethod_New(self->callable, owner);
+}
+
+static void MyClassMethod_Dealloc(MyClassMethod *self){
+    Py_XDECREF(self->callable);
+    Py_XDECREF(self->dict);
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static int MyClassMethod_Clear(MyClassMethod *self){
+    Py_CLEAR(self->callable);
+    Py_CLEAR(self->dict);
+    return 0;
+}
+
+static int MyClassMethod_Vist(MyClassMethod *self, visitproc visit, void *arg){
+    Py_VISIT(self->callable);
+    Py_VISIT(self->dict);
+    return 0;
+}
+
+static PyMemberDef MyClassMethod_Members[] = {
+    {"__func__", T_OBJECT_EX, offsetof(MyClassMethod, callable), READONLY},
+    {"__wrapped__", T_OBJECT_EX, offsetof(MyClassMethod, callable), READONLY},
+    {NULL}
+};
+
+static PyGetSetDef MyClassMethod_GetSet[] = {
+    {"__dict__", PyObject_GenericGetDict, PyObject_GenericSetDict, NULL, NULL},
+    {NULL}
+};
+
+PyTypeObject MyClassMethod_Type = {
+    PyVarObject_HEAD_INIT(&PyType_Type, 0)
+    .tp_name = "cppbuiltins.classmethod",
+    .tp_basicsize = sizeof(MyClassMethod),
+    .tp_itemsize = 0,
+    .tp_dealloc = (destructor)MyClassMethod_Dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_GC,
+    .tp_traverse = (traverseproc)MyClassMethod_Vist,
+    .tp_clear = (inquiry)MyClassMethod_Clear,
+    .tp_members = MyClassMethod_Members,
+    .tp_getset = MyClassMethod_GetSet,
+    .tp_descr_get = (descrgetfunc)MyClassMethod_Descr_Get,
+    .tp_dictoffset = offsetof(MyClassMethod, dict),
+    .tp_init = (initproc)MyClassMethod_Init,
+    .tp_alloc = PyType_GenericAlloc,
+    .tp_new = PyType_GenericNew,
+    .tp_free = PyObject_GC_Del, 
+};
 
 static PyObject * c_dir_func(PyObject *self, PyObject *args){
     PyObject *item = NULL;
@@ -1635,6 +1718,7 @@ PyInit_cppbuiltins(void) {
         Py_DECREF(m);
         return NULL;
     }*/
+    Add_PyType_Func(m, &MyClassMethod_Type);
     Add_PyType_Func(m, &PyEnumerate_Type);
     Add_PyType_Func(m, &PyFilterMyType);
     Add_PyType_Func(m, &PyIterObjectType);

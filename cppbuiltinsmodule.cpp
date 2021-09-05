@@ -10,6 +10,9 @@
 #include <tuple>
 #include <vector>
 
+#define PyKwargFunction (PyCFunction)(void(*)(void))
+#define llong unsigned long long
+
 static PyObject * c_abs_func(PyObject *self, PyObject *args){
     signed long long num;
     if (!PyArg_ParseTuple(args, "L", &num)){
@@ -139,11 +142,13 @@ static PyObject * c_bin_func(PyObject *self, PyObject *args){
 
 //METH_O
 static PyObject * c_api_bin_func(PyObject *self, PyObject *num){
-    PyObject * result = PyNumber_ToBase(num, 2);
-    if (result == NULL){
+    PyObject *result, *temp = PyNumber_ToBase(num, 2);
+    if (temp == NULL){
         return NULL;
     }
-    return PyObject_Str(result);
+    result = PyObject_Str(temp);
+    Py_XDECREF(temp);
+    return result;
 }
 
 //METH_O
@@ -594,11 +599,13 @@ static PyObject * c_hex_func(PyObject *self, PyObject *args){
 
 //METH_O
 static PyObject * c_hex_api_func(PyObject *self, PyObject *num){
-    PyObject * result = PyNumber_ToBase(num, 16);
-    if (result == NULL){
+    PyObject *result, *temp = PyNumber_ToBase(num, 16);
+    if (temp == NULL){
         return NULL;
     }
-    return PyObject_Str(result);
+    result = PyObject_Str(temp);
+    Py_XDECREF(temp);
+    return result;
 }
 
 static PyObject * c_input_func(PyObject *self, PyObject *args){
@@ -1253,7 +1260,6 @@ static PyObject * timsort(PyObject *list){
         }
         size *= 2;
     }
-    PyObject_Print(list, stdout, 0);
     return list;
 }
 
@@ -1270,14 +1276,288 @@ static PyObject * c_timesort_func(PyObject *self, PyObject *list){
     else {
         result = list;
     }
-    std::puts("before tim");
     result = timsort(result);
-    std::puts("after tim");
     if (PyErr_Occurred() || result == NULL){
         return NULL;
     }
+    //return result;
+    Py_RETURN_NONE;
+}
+
+/*
+static PyObject * dummy_id(PyObject *item){
+    return item;
+}*/
+
+static PyObject * min_max_loop(PyObject *args, PyObject *kwargs, int op){
+    PyObject *iterable, *temp, *defaultval = NULL, *key = NULL;
+    PyObject *item, *value, *topitem, *maxvalue;
+    int cmp, positional = PyTuple_Size(args) > 1;
+    const char *name = op == Py_GT ? "max" : "min";
+    char *kwlist[] = {(char *)"key", (char *)"default", NULL};
+    if (positional){
+        iterable = args;
+    }
+    else if (!PyArg_ParseTuple(args, "O", &iterable)){
+        PyErr_Format(PyExc_TypeError, "%s expects at least 1 argument, recieved 0", name);
+        return NULL;
+    }
+    temp = PyTuple_New(0);
+    if (!PyArg_ParseTupleAndKeywords(temp, kwargs, (op == Py_GT) ? "|$OO:max":"|$OO:min",
+                                     kwlist, &key, &defaultval)){
+        Py_XDECREF(temp);
+        return NULL;
+    }
+    Py_XDECREF(temp);
+    if (positional && defaultval != NULL){
+        char msg[] = "Cannot specify a default for max() with multiple positional arguments";
+        PyErr_SetString(PyExc_TypeError, msg);
+        return NULL;
+    }
+    //PyObject * (*func)(PyObject *) = &dummy_id; function pointer
+    iterable = PyObject_GetIter(iterable);
+    if (iterable == NULL || PyErr_Occurred()){
+        if (PyErr_Occurred()){
+            PyErr_Clear();
+        }
+        PyErr_Format(PyExc_TypeError, "%s argument was not iterable", name);
+        return NULL;
+    }
+    if ((item = PyIter_Next(iterable)) == NULL){
+        Py_XDECREF(iterable);
+        if (PyErr_Occurred()){
+            if (PyErr_ExceptionMatches(PyExc_StopIteration)){
+                PyErr_Clear();
+                Py_XINCREF(defaultval);
+                return defaultval;
+            }
+            return NULL;
+        }
+        Py_XINCREF(defaultval);
+        return defaultval;
+    }
+    topitem = item;
+    if (key != NULL){
+        if ((value = PyObject_CallOneArg(key, item)) == NULL){
+            Py_XDECREF(item);
+            return NULL;
+        }
+        maxvalue = value;
+    }
+    else {
+        maxvalue = value = topitem = item;
+    }
+    Py_XINCREF(value);
+    while ((item = PyIter_Next(iterable)) != NULL){
+        if (key != NULL){
+            if ((value = PyObject_CallOneArg(key, item)) == NULL){
+                Py_XDECREF(item);
+                Py_XDECREF(topitem);
+                Py_XDECREF(maxvalue);
+                return NULL;
+            }
+        }
+        else {
+            value = item;
+            Py_XINCREF(value);
+        }
+        cmp = PyObject_RichCompareBool(value, maxvalue, op); // Py_GT == value > maxvalue
+        if (cmp < 0){
+            Py_XDECREF(item);
+            Py_XDECREF(value);
+            Py_XDECREF(topitem);
+            Py_XDECREF(maxvalue);
+            return NULL;
+        }
+        else if (cmp){
+            Py_XDECREF(topitem);
+            Py_XDECREF(maxvalue);
+            topitem = item;
+            maxvalue = value;
+        }
+        else {
+            Py_XDECREF(item);
+            Py_XDECREF(value);
+        }
+    }
+    Py_XDECREF(maxvalue);
+    return topitem;
+}
+
+static PyObject * c_max_func(PyObject *self, PyObject *args, PyObject *kwargs){
+    return min_max_loop(args, kwargs, Py_GT);
+}
+
+static PyObject * c_min_func(PyObject *self, PyObject *args, PyObject *kwargs){
+    PyObject * result = min_max_loop(args, kwargs, Py_LT);
     return result;
 }
+
+static inline PyObject * CLEAR_AND_RETURN(PyObject *item){
+    if (item != NULL){
+        PyErr_Clear();
+    }
+    return item;
+}
+
+static PyObject * c_next_func(PyObject *self, PyObject *args){
+    PyObject *item, *iterator, *sentinel = NULL;
+    if (!PyArg_ParseTuple(args, "O|O", &iterator, &sentinel)){
+        return NULL;
+    }
+    if (PyObject_HasAttrString(iterator, "__next__")){
+        if ((item = PyObject_CallMethod(iterator, "__next__", NULL)) == NULL){
+            return PyErr_ExceptionMatches(PyExc_StopIteration) ? CLEAR_AND_RETURN(sentinel) : NULL;
+        }
+        return item;
+    }
+    PyErr_Format(PyExc_TypeError, "'%s' object is not an iterator", iterator->ob_type->tp_name);
+    return NULL;
+}
+
+static PyObject * c_next_api_func(PyObject *self, PyObject *args){
+    PyObject *item, *iterator, *sentinel = NULL;
+    if (!PyArg_ParseTuple(args, "O|O", &iterator, &sentinel)){
+        return NULL;
+    }
+    if (!PyIter_Check(iterator)){
+        PyErr_Format(PyExc_TypeError, "'%s' object is not an iterator", iterator->ob_type->tp_name);
+        return NULL;
+    }
+    else if ((item = PyIter_Next(iterator)) == NULL){
+        if (!PyErr_Occurred()){
+            PyErr_SetNone(PyExc_StopIteration);
+        }
+        return PyErr_ExceptionMatches(PyExc_StopIteration) ? CLEAR_AND_RETURN(sentinel) : NULL;
+    }
+    return item;
+}
+
+static PyObject * c_oct_func(PyObject *self, PyObject *args){
+    signed long long num;
+    if (!PyArg_ParseTuple(args, "L", &num)){
+        return NULL;
+    }
+    std::string result = "";
+    my_base_converter(&num, 'O', &result);
+    return PyUnicode_FromString(result.c_str());
+}
+
+//METH_O
+static PyObject * c_oct_api_func(PyObject *self, PyObject *num){
+    PyObject *result, *temp = PyNumber_ToBase(num, 8);
+    if (temp == NULL){
+        return NULL;
+    }
+    result = PyObject_Str(temp);
+    Py_XDECREF(temp);
+    return result;
+}
+
+static inline const char *type_name(PyObject *item){
+    return item->ob_type->tp_name;
+}
+
+typedef struct NumStruct {
+    unsigned long long int_num;
+    long double float_num;
+    short int int_success;
+    short int float_success;
+} NumStruct;
+
+static void parse_num(PyObject *num, NumStruct *nstruct){
+    nstruct->float_success = 0;
+    nstruct->int_success = 0;
+    if (PyLong_Check(num)){
+        nstruct->int_num = PyLong_AsUnsignedLongLong(num);
+        nstruct->int_success = 1;
+    }
+    else if (PyFloat_Check(num)){
+        nstruct->float_num = PyFloat_AsDouble(num);
+        nstruct->float_success = 1;
+    }  
+}
+
+static PyObject * build_pow_value(signed long long num){
+    return PyLong_FromLongLong(num);
+}
+
+static PyObject * build_pow_value(long double num){
+    return PyFloat_FromDouble(num);
+}
+
+static PyObject * c_pow_func(PyObject *self, PyObject *args, PyObject *kwargs){
+    PyObject *tempbase, *tempexp, *tempmod = NULL;
+    char *kwlist[] = {(char *)"base", (char *)"exp", (char *)"mod", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|O", kwlist, &tempbase, &tempexp, &tempmod)){
+        return NULL;
+    }
+    short int have_mod = tempmod != NULL;
+    char typeerro1[] = "unsupported operand type(s) for pow(): '%s', '%s', '%s'";
+    char typerror2[] = "unsupported operand type(s) for ** or pow(): '%s' and '%s'";
+    char type_msg[65];
+    have_mod ? memcpy(type_msg,typeerro1,strlen(typeerro1)+1) : memcpy(type_msg,typerror2,strlen(typerror2)+1);
+    NumStruct nstruct;
+    parse_num(tempbase, &nstruct);
+    if (!(nstruct.float_success || nstruct.int_success)){
+        if (have_mod){
+            PyErr_Format(PyExc_TypeError, type_msg, type_name(tempbase), type_name(tempexp), type_name(tempmod));
+        }
+        else{
+            PyErr_Format(PyExc_TypeError, type_msg, type_name(tempbase), type_name(tempexp));
+        }
+        return NULL;
+    }
+    auto basenum = nstruct.int_success ? nstruct.int_num : nstruct.float_num;
+    parse_num(tempexp, &nstruct); 
+    if (!(nstruct.float_success || nstruct.int_success)){
+        if (have_mod){
+            PyErr_Format(PyExc_TypeError, type_msg, type_name(tempbase), type_name(tempexp), type_name(tempmod));
+        }
+        else{
+            PyErr_Format(PyExc_TypeError, type_msg, type_name(tempbase), type_name(tempexp));
+        }
+        return NULL;
+    }
+    auto expnum = nstruct.int_success ? nstruct.int_num : nstruct.float_num;
+    auto result = pow(basenum, expnum);
+    if (!have_mod){
+        if (!PyLong_Check(tempbase) || !PyLong_Check(tempexp)){
+            return build_pow_value(result);
+        }
+        return build_pow_value((signed long long)result);
+    }
+    parse_num(tempmod, &nstruct);
+    auto modnum = nstruct.int_success ? nstruct.int_num : nstruct.float_num;
+    if (!(nstruct.float_success||nstruct.int_success)){
+        PyErr_Format(PyExc_TypeError, type_msg, type_name(tempbase), type_name(tempexp), type_name(tempmod));
+        return NULL;
+    }
+    if (!(basenum == trunc(basenum) && expnum == trunc(expnum) && modnum == trunc(modnum))){
+        PyErr_SetString(PyExc_TypeError, "pow() 3rd argument not allowed unless all arguments are integers");
+        return NULL;
+    }
+    else if (modnum == 0){
+        PyErr_SetString(PyExc_TypeError, "pow() 3rd argument cannot be 0");
+        return NULL;
+    }
+    return build_pow_value((signed long long)result % (Py_ssize_t)modnum);
+}
+
+static PyObject * c_pow_api_func(PyObject *self, PyObject *args, PyObject *kwargs){
+    PyObject *basenum, *expnum, *modnum = NULL;
+    char *kwlist[] = {(char *)"base", (char *)"exp", (char *)"mod", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|O", kwlist, &basenum, &expnum, &modnum)){
+        return NULL;
+    }
+    return modnum == NULL ? PyNumber_Power(basenum, expnum, Py_None) : PyNumber_Power(basenum, expnum, modnum);
+}
+
+/*typedef struct {
+    PyObject_HEAD
+    llong index;
+    PyObject *seq;
+} PyReverseObject;*/
 
 // Module Level Function Registry 
 static PyMethodDef CPPBuiltinsMethods[] = {
@@ -1314,6 +1594,14 @@ static PyMethodDef CPPBuiltinsMethods[] = {
     {"insertion_sort", c_insertion_sort_func, METH_O, "insertion sort in C++."},
     {"merge_sort", c_merge_sort_func, METH_O, "merge sort in C++."},
     {"timsort", c_timesort_func, METH_O, "timsort in C++."},
+    {"max", PyKwargFunction c_max_func, METH_VARARGS | METH_KEYWORDS, "max() in C++."},
+    {"min", PyKwargFunction c_min_func, METH_VARARGS | METH_KEYWORDS, "min() in C++."},
+    {"next", c_next_func, METH_VARARGS, "next() in C++."},
+    {"next_api", c_next_api_func, METH_VARARGS, "next() using C API."},
+    {"oct", c_oct_func, METH_VARARGS, "oct() in C++."},
+    {"oct_api", c_oct_api_func, METH_O, "oct() using C API."},
+    {"pow", PyKwargFunction c_pow_func, METH_VARARGS | METH_KEYWORDS, "pow() in C++."},
+    {"pow_api", PyKwargFunction c_pow_api_func, METH_VARARGS | METH_KEYWORDS, "pow() in C API."},
     {NULL, NULL, 0, NULL}
 };
 

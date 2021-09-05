@@ -345,10 +345,11 @@ def timsort(arr: list) -> None:
         size *= 2
 
 
+# BROKEN
 def _max(*iterable: Iterable, key: FunctionType = None, default: object = Null) -> object:
     if len(iterable) == 1 and not isinstance(iterable[0], Iterable):
         raise TypeError(f"{type_name(iterable)!r} object is not iterable")
-    elif len(iterable) > 2:
+    elif len(iterable) > 1:
         iterable = list(iterable)
     else:
         iterable = iterable[0]
@@ -366,6 +367,7 @@ def _max(*iterable: Iterable, key: FunctionType = None, default: object = Null) 
     return arr[-1]
 
 
+# BROKEN
 def _min(*iterable: Iterable, key: FunctionType = None, default: object = Null) -> object:
     if len(iterable) == 1 and not isinstance(iterable[0], Iterable):
         raise TypeError(f"{type_name(iterable)!r} object is not iterable")
@@ -537,10 +539,8 @@ def _reversed(seq: Iterable) -> Union[Iterator, DefaultGenerator]:
     elif hasattr(seq, '__len__') and hasattr(seq, '__getitem__'):
         if not isinstance(seq, Mapping) and not isinstance(seq, Set):
             def fake_iterator():
-                index = len(seq) - 1
-                while index > -1:
+                for index in range(len(seq)-1, -1, -1):
                     yield seq[index]
-                    index -= 1
             return fake_iterator()
     raise TypeError(f"{type_name(seq)!r} is not reversible")
 

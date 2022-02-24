@@ -864,7 +864,7 @@ static PyObject * PyIterObject_Getitem(PyIterObject *self){
         }
         return NULL;
     }
-    self->index += 1;
+    self->index++;
     return item;
 }
 

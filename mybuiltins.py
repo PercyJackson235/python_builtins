@@ -353,40 +353,48 @@ def _max(*iterable: Iterable, key: FunctionType = None, default: object = Null) 
         iterable = list(iterable)
     else:
         iterable = iterable[0]
-    if len(iterable) == 0 and default is not Null:
-        return default
-    else:
-        raise ValueError("_max() arg is an empty sequence")
-    if not callable(key):
-        raise TypeError(f"{type_name(key)!r} is not callable")
+    if len(iterable) == 0:
+        if default is not Null:
+            return default
+        else:
+            raise ValueError("_max() arg is an empty sequence")
     if key is not None:
-        arr = [key(i) for i in iterable]
+        if not callable(key):
+            raise TypeError(f"{type_name(key)!r} is not callable")
+        arr = {key(i): i for i in iterable}
+        keys = list(arr)
+        timsort(keys)
+        return arr[keys[-1]]
     else:
         arr = iterable.copy()
-    timsort(arr)
-    return arr[-1]
+        timsort(arr)
+        return arr[-1]
 
 
 # BROKEN
 def _min(*iterable: Iterable, key: FunctionType = None, default: object = Null) -> object:
     if len(iterable) == 1 and not isinstance(iterable[0], Iterable):
         raise TypeError(f"{type_name(iterable)!r} object is not iterable")
-    elif len(iterable) > 2:
+    elif len(iterable) > 1:
         iterable = list(iterable)
     else:
         iterable = iterable[0]
-    if len(iterable) == 0 and default is not Null:
-        return default
-    else:
-        raise ValueError("_min() arg is an empty sequence")
-    if not callable(key):
-        raise TypeError(f"{type_name(key)!r} is not callable")
+    if len(iterable) == 0:
+        if default is not Null:
+            return default
+        else:
+            raise ValueError("_min() arg is an empty sequence")
     if key is not None:
-        arr = [key(i) for i in iterable]
+        if not callable(key):
+            raise TypeError(f"{type_name(key)!r} is not callable")
+        arr = {key(i): i for i in iterable}
+        keys = list(arr)
+        timsort(keys)
+        return arr[keys[0]]
     else:
         arr = iterable.copy()
-    timsort(arr)
-    return arr[0]
+        timsort(arr)
+        return arr[0]
 
 
 def _next(iterator: Iterator, default: object = Null) -> object:
